@@ -1,0 +1,60 @@
+body {
+    --accent-c: #F9C;
+    --accent-light-c: #FAD;
+    --text-c: #333;
+    margin: 40px auto;
+    max-width: 650px;
+    line-height: 1.6;
+    font-size: 18px;
+    color: var(--text-c);
+    background-color: #EEE;
+    padding: 0 10px;
+    font-family: sans-serif, serif;
+    
+}
+
+h1,
+h2,
+h3 {
+    line-height: 1.2
+}
+
+a {
+    color: #28E;
+    text-decoration: none;
+}
+
+a:visited {
+    color: #E28;
+}
+
+img {
+    width: 100%;
+}
+
+details p {
+    font-size: 16px;
+    margin: 5px 0px;
+}
+
+details summary {
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.link-button {
+    display: inline-block;
+    padding: 10px 20px 10px 20px;
+    background-color: var(--accent-c);
+    color: var(--text-c);
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.link-button:hover {
+    background-color: var(--accent-light-c);
+}
+
+.link-button:visited {
+    color: var(--text-c);
+}
