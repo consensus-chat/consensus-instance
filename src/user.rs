@@ -1,5 +1,7 @@
 use axum::{extract::State, http::StatusCode, response::IntoResponse};
-use sqlx::{Pool, Sqlite};
+use sqlx::{Pool, Sqlite, Row};
+
+use crate::ConsensusRes;
 
 // Registers a new user
 pub async fn handler_register(State(db_pool): State<Pool<Sqlite>>, body: String) -> impl IntoResponse {
@@ -36,4 +38,21 @@ pub async fn handler_register(State(db_pool): State<Pool<Sqlite>>, body: String)
 // Returns a users key if login was successful
 pub async fn handler_login(body: String) -> impl IntoResponse {
     println!("{}", body)
+}
+
+pub async fn user_login(db_pool: Pool<Sqlite>, email: String, password: String) -> ConsensusRes {
+    let row = match sqlx::query("SELECT * FROM users WHERE email = ?1;")
+        .bind(email)
+        .fetch_one(&db_pool).await {
+        Ok(row) => {row},
+        Err(e) => {
+            println!("{}", e);
+            return ConsensusRes::Login { res: Err("User not registered".into()) };},
+    };
+
+    // TODO: password verification
+
+    let key: String = row.get(5);
+
+    ConsensusRes::Login { res: Ok(key.to_string()) }
 }
