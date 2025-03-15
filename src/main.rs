@@ -148,5 +148,6 @@ pub async fn handler(State(state): State<InstanceState>, extract::Json(payload):
         ConsensusReq::ReqToken { instance, user_id, signature } => user::user_request_token(&state, instance, user_id, signature).await,
         ConsensusReq::ReqUserKey { user_id } => server::server_request_user_key(&state, user_id).await,
         ConsensusReq::Register { username, email, password } => user::user_register(&state, username, email, password).await,
+        ConsensusReq::ReqUserInfo { token } => user::user_request_user_info(&state, token).await,
     })
 }

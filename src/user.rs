@@ -14,7 +14,7 @@ pub async fn user_login(state: &InstanceState, email: String, password: String) 
         Ok(row) => {row},
         Err(_) => {
             info!("Login attempt from {}... - Failure, User not registered", {let mut e = email.clone(); e.truncate(9); e});
-            return ConsensusRes::Login { res: Err("User not registered".into()) };
+            return ConsensusRes::Error(ConsensusError::NotFound);
         },
     };
 
@@ -28,7 +28,7 @@ pub async fn user_login(state: &InstanceState, email: String, password: String) 
     if password_hash != expected_hash {
         info!("Login attempt from {}... - Failure, Password or Email incorrect", {let mut e = email.clone(); e.truncate(9); e});
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-        return ConsensusRes::Login { res: Err("Password or Email incorrect".into()) };
+        return ConsensusRes::Error(ConsensusError::Incorrect);
     }
 
     let id: String = row.get("id");
@@ -37,7 +37,7 @@ pub async fn user_login(state: &InstanceState, email: String, password: String) 
     let authkey: String = row.get("authkey_private");
 
     info!("Login attempt from {}... - Success", {let mut e = email.clone(); e.truncate(9); e});
-    ConsensusRes::Login { res: Ok(("localhost:3000".into(), id, username, email, authkey)) }
+    ConsensusRes::Login("localhost:3000".into(), id, username, email, authkey)
 }
 
 /// Handle user registration requests
@@ -48,7 +48,7 @@ pub async fn user_register(state: &InstanceState, username: String, email: Strin
         .fetch_one(&state.db_pool).await {
         Ok(_) => {
             info!("Registration attempt from {}... - Failure, Email in use", {let mut e = email.clone(); e.truncate(9); e});
-            return ConsensusRes::Login { res: Err("Email in use".into()) };
+            return ConsensusRes::Error(ConsensusError::EmailInUse);
         },
         Err(_) => {},
     };
@@ -86,7 +86,7 @@ pub async fn user_register(state: &InstanceState, username: String, email: Strin
         .execute(&state.db_pool).await.unwrap();
 
     info!("Registration attempt from {}... - Success", {let mut e = email.clone(); e.truncate(9); e});
-    ConsensusRes::Login { res: Ok(("localhost:3000".into(), id, username, email, "0".into())) }
+    ConsensusRes::Login("localhost:3000".into(), id, username, email, "0".into())
 }
 
 /// Handle a user request for a token
@@ -98,27 +98,24 @@ pub async fn user_request_token(state: &InstanceState, instance: String, id: Str
     let key = match res {
         Ok(res) => {
             match res {
-                ConsensusRes::UserKey { res } => {
-                    match res {
-                        Ok(key) => {
-                            match hex::decode(key) {
-                                Ok(k) => k,
-                                Err(_) => {
-                                    warn!("Token request with malformed authentication key.");
-                                    return ConsensusRes::Token { res: Err(ConsensusError::Rejected) }; },
-                            }
-                        },
-                        Err(e) => {return ConsensusRes::Token { res: Err(e) }},
+                ConsensusRes::UserKey(key) => {
+                        match hex::decode(key) {
+                            Ok(k) => k,
+                            Err(_) => {
+                                warn!("Token request with malformed authentication key.");
+                                return ConsensusRes::Error(ConsensusError::Rejected);
+                            },
+                        }
                     }
-                },
                 _ => {
                     warn!("Token request with unexpected response from sign-on instance.");
-                    return ConsensusRes::Token { res: Err(ConsensusError::Rejected) }; }
+                    return ConsensusRes::Error(ConsensusError::Rejected)
+                }
             }
         },
         Err(e) => {
             warn!("Token request with error from sign-on instance: {}", e);
-            return ConsensusRes::Token { res: Err(ConsensusError::Rejected) }
+            return ConsensusRes::Error(ConsensusError::Rejected)
         },
     };
 
@@ -127,7 +124,7 @@ pub async fn user_request_token(state: &InstanceState, instance: String, id: Str
         Ok(s) => s,
         Err(_) => {
             warn!("Token request {} - malformed signature.", ids);
-            return ConsensusRes::Token { res: Err(ConsensusError::Rejected) };
+            return ConsensusRes::Error(ConsensusError::Rejected);
         },
     };
 
@@ -136,7 +133,7 @@ pub async fn user_request_token(state: &InstanceState, instance: String, id: Str
         Ok(_) => (),
         Err(_) => {
             warn!("Token request {} - wrong authentication key.", ids);
-            return ConsensusRes::Token { res: Err(ConsensusError::Rejected) };
+            return ConsensusRes::Error(ConsensusError::Rejected);
         },
     }
 
@@ -154,5 +151,9 @@ pub async fn user_request_token(state: &InstanceState, instance: String, id: Str
         .execute(&state.db_pool).await.unwrap();
 
     info!("Token request {} - Success", ids);
-    ConsensusRes::Token { res: Ok(ConsensusToken { token, valid_until: time_valid }) }
-} 
+    ConsensusRes::Token(ConsensusToken { token, valid_until: time_valid })
+}
+
+pub async fn user_request_user_info(state: &InstanceState, token: String) -> ConsensusRes {
+    ConsensusRes::Error(ConsensusError::Rejected)
+}
