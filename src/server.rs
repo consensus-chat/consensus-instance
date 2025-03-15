@@ -18,7 +18,7 @@ pub async fn make_req(
         .await
     {
         Ok(res) => res,
-        Err(_) => { return Err(format!("Error connecting to '{}'", instance)) },
+        Err(_) => return Err(format!("Error connecting to '{}'", instance)),
     };
 
     match serde_json::from_str(&res.text().await.unwrap()) {
@@ -30,12 +30,18 @@ pub async fn make_req(
 pub async fn server_request_user_key(state: &InstanceState, user_id: String) -> ConsensusRes {
     let row = match sqlx::query("SELECT * FROM users WHERE id = ?1;")
         .bind(&user_id)
-        .fetch_one(&state.db_pool).await {
-        Ok(row) => {row},
+        .fetch_one(&state.db_pool)
+        .await
+    {
+        Ok(row) => row,
         Err(_) => {
-            info!("User key request {} - Failure, User not found", {let mut e = user_id.clone(); e.truncate(9); e});
+            info!("User key request {} - Failure, User not found", {
+                let mut e = user_id.clone();
+                e.truncate(9);
+                e
+            });
             return ConsensusRes::Error(ConsensusError::NotFound);
-        },
+        }
     };
     let key: String = row.get("authkey_public");
     ConsensusRes::UserKey(key)

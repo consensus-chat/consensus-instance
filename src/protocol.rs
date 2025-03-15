@@ -2,22 +2,30 @@
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub enum ConsensusReq {
     /// User login request
-    Login {email: String, password: String},
+    Login { email: String, password: String },
     /// User registration request
-    Register {username: String, email: String, password: String},
+    Register {
+        username: String,
+        email: String,
+        password: String,
+    },
     /// User token request
-    ReqToken {instance: String, user_id: String, signature: String},
+    ReqToken {
+        instance: String,
+        user_id: String,
+        signature: String,
+    },
     /// Instance requests user public key from another instance
-    ReqUserKey {user_id: String},
+    ReqUserKey { user_id: String },
     /// User requests their online user information from sign-on instance
-    ReqUserInfo {token: String},
+    ReqUserInfo { token: String },
 }
 
 /// Enum for all consensus protocol responses
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub enum ConsensusRes {
     Error(ConsensusError),
-    /// Login response, either success with (instance, id, username, email, authkey_priv) or failure with error
+    /// Login response with (instance, id, username, email, authkey_priv)
     Login(String, String, String, String, String),
     /// Token response, Token request may be denied -> Error
     Token(ConsensusToken),
@@ -40,7 +48,6 @@ pub struct ConsensusUserInfo {
     pub token: String,
     pub valid_until: String,
 }
-
 
 /// Enum for all consensus protocol errors
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
