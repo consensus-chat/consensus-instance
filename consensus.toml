@@ -1,0 +1,20 @@
+# name of the instance
+name = "Consensus"
+# port for connections
+port = 3000
+
+[logging]
+# enable logging to a log file
+enable_file = true
+# log file path (only required if enable_file = true)
+log_path = "log/out.log"
+# enable logging to stdout
+enable_stdout = true
+# log message pattern of log4rs, optional with default "[{d(%Y-%m-%d %H:%M:%S)} {l}]: {m}{n}"
+pattern = "[{d(%Y-%m-%d %H:%M:%S)(utc)} UTC {l}]: {m}{n}"
+# log level, optional with default "Info"
+level = "Info"
+
+[users]
+accept_registration = true
+max_users = 16
