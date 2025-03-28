@@ -2,14 +2,25 @@ use hex::ToHex;
 use log::{info, warn};
 use ring::{rand::SecureRandom, signature::KeyPair};
 use sha2::{Digest, Sha256};
-use sqlx::Row;
+use sqlx::{QueryBuilder, Row, Sqlite};
 
 use crate::{
-    ConsensusError, ConsensusReq, ConsensusRes, ConsensusToken, InstanceState, server, util,
+    server, util, ConsensusError, ConsensusReq, ConsensusRes, ConsensusToken, InstanceState, ServerData, SyncedUserData
 };
 
+async fn user_registered(state: &InstanceState, uid: &str) -> bool {
+    match sqlx::query("SELECT * FROM users WHERE id = ?1;")
+        .bind(uid)
+        .fetch_one(&state.db_pool)
+        .await
+    {
+        Ok(_) => return true,
+        Err(_) => return false,
+    }
+}
+
 /// Handle user login requests
-pub async fn user_login(state: &InstanceState, email: String, password: String) -> ConsensusRes {
+pub async fn login(state: &InstanceState, email: String, password: String) -> ConsensusRes {
     let ems = {let mut e = email.clone(); e.truncate(9); e};
     let row = match sqlx::query("SELECT * FROM users WHERE email = ?1;")
         .bind(&email)
@@ -42,11 +53,11 @@ pub async fn user_login(state: &InstanceState, email: String, password: String) 
     let authkey: String = row.get("authkey_private");
 
     info!("Login attempt from {}... - Success", ems);
-    ConsensusRes::Login("localhost:3000".into(), id, username, email, authkey)
+    ConsensusRes::Login(state.config.domain.clone(), id, username, email, authkey)
 }
 
 /// Handle user registration requests
-pub async fn user_register(
+pub async fn register(
     state: &InstanceState,
     username: String,
     email: String,
@@ -86,7 +97,7 @@ pub async fn user_register(
     hasher.update(password + &password_salt);
     let password_hash = hex::encode(hasher.finalize());
 
-    sqlx::query("INSERT INTO users (id, username, email, password, salt, validated, authkey_public, authkey_private, registered) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);")
+    sqlx::query("INSERT INTO users (id, username, email, password, salt, validated, authkey_public, authkey_private, registered, last_synced) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);")
         .bind(&id)
         .bind(&username)
         .bind(&email)
@@ -94,16 +105,17 @@ pub async fn user_register(
         .bind(password_salt)
         .bind(false)
         .bind(auth_key_public)
-        .bind(auth_key_private)
-        .bind(time_registered)
+        .bind(&auth_key_private)
+        .bind(&time_registered)
+        .bind(&time_registered)
         .execute(&state.db_pool).await.unwrap();
 
     info!("Registration attempt from {}... - Success", ems);
-    ConsensusRes::Login("localhost:3000".into(), id, username, email, "0".into())
+    ConsensusRes::Login(state.config.domain.clone(), id, username, email, auth_key_private)
 }
 
 /// Handle a user request for a token
-pub async fn user_request_token(
+pub async fn request_token(
     state: &InstanceState,
     instance: String,
     id: String,
@@ -118,7 +130,7 @@ pub async fn user_request_token(
     let res = server::make_req(
         &state,
         &instance,
-        ConsensusReq::ReqUserKey {
+        ConsensusReq::InstReqUserKey {
             user_id: id.clone(),
         },
     )
@@ -165,7 +177,7 @@ pub async fn user_request_token(
     }
 
     // User validated, generate and send token.
-    let token = util::gen_uid_512();
+    let token = util::gen_uid_256();
     let time_created = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let time_valid = chrono::Utc::now()
         .checked_add_days(chrono::Days::new(1))
@@ -188,6 +200,146 @@ pub async fn user_request_token(
     })
 }
 
-pub async fn user_request_user_info(state: &InstanceState, token: String) -> ConsensusRes {
-    ConsensusRes::Error(ConsensusError::Rejected)
+async fn get_db_user_data(state: &InstanceState, uid: &str) -> SyncedUserData {
+    let row_user = sqlx::query("SELECT * FROM users WHERE id = ?1;")
+        .bind(&uid)
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap();
+
+    let rows_servers = sqlx::query("SELECT * FROM user_servers WHERE user_id = ?1;")
+        .bind(&uid)
+        .fetch_all(&state.db_pool)
+        .await
+        .unwrap();
+    let mut servers = vec![];
+
+    for r in rows_servers {
+        servers.push(ServerData {
+            name: r.get("server_name"),
+            instance: r.get("server_instance"),
+            id: r.get("server_id"),
+        });
+    }
+
+    SyncedUserData {
+        last_synced: row_user.get("last_synced"),
+        display_name: row_user.get("username"),
+        status: row_user.get("status"),
+        pronouns: row_user.get("pronouns"),
+        bio: row_user.get("bio"),
+        servers,
+    }
+}
+
+async fn set_db_user_data(state: &InstanceState, uid: &str, data: &SyncedUserData) {
+    sqlx::query("UPDATE users SET username = ?1, status = ?2, pronouns = ?3, bio = ?4, last_synced = ?5 WHERE id = ?6;")
+        .bind(&data.display_name)
+        .bind(&data.status)
+        .bind(&data.pronouns)
+        .bind(&data.bio)
+        .bind(&data.last_synced)
+        .bind(uid)
+        .execute(&state.db_pool).await.unwrap();
+
+    sqlx::query("DELETE FROM user_servers WHERE user_id = ?1;")
+        .bind(uid)
+        .execute(&state.db_pool).await.unwrap();
+
+    let mut query_builder: QueryBuilder<Sqlite> = QueryBuilder::new("INSERT INTO user_servers (user_id, server_id, server_instance, server_name) ");
+    query_builder.push_values(data.servers.clone(), |mut b, s| {
+        b.push_bind(uid)
+            .push_bind(s.id)
+            .push_bind(s.instance)
+            .push_bind(s.name);
+    });
+    let query = query_builder.build();
+    query.execute(&state.db_pool).await.unwrap();
+}
+
+/// A registered user requests their user data from this instance
+pub async fn request_user_data(state: &InstanceState, token: String) -> ConsensusRes {
+    info!("User data request");
+    let (uid, uinstance) = match val_token(state, &token).await {
+        Ok(user) => user,
+        Err(_) => return ConsensusRes::Error(ConsensusError::NotAuthorised),
+    };
+
+    if !(uinstance == state.config.domain) {
+        return ConsensusRes::Error(ConsensusError::NotFound)
+    }
+
+    if !(user_registered(state, &uid).await) {
+        return ConsensusRes::Error(ConsensusError::NotFound)
+    }
+
+    let data = get_db_user_data(state, &uid).await;
+    ConsensusRes::SyncedUserData(data)
+}
+
+/// A registered user requests user data synchronization
+pub async fn sync_user_data(state: &InstanceState, token: String, data: SyncedUserData) -> ConsensusRes {
+    info!("User data sync request");
+    let (uid, uinstance) = match val_token(state, &token).await {
+        Ok(user) => user,
+        Err(_) => return ConsensusRes::Error(ConsensusError::NotAuthorised),
+    };
+
+    if !(uinstance == state.config.domain) {
+        return ConsensusRes::Error(ConsensusError::NotFound)
+    }
+
+    if !(user_registered(state, &uid).await) {
+        return ConsensusRes::Error(ConsensusError::NotFound)
+    }
+
+    let server_data = get_db_user_data(state, &uid).await;
+    let s_last_sync = chrono::NaiveDateTime::parse_from_str(&server_data.last_synced, "%Y-%m-%d %H:%M:%S").unwrap().and_utc();
+    let c_last_sync = chrono::NaiveDateTime::parse_from_str(&data.last_synced, "%Y-%m-%d %H:%M:%S").unwrap().and_utc();
+    let client_outdated = c_last_sync < s_last_sync;
+
+    let mut new_data = SyncedUserData {
+        last_synced: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        display_name: server_data.display_name,
+        status: server_data.status,
+        pronouns: server_data.pronouns,
+        bio: server_data.bio,
+        servers: vec![],
+    };
+
+    if client_outdated {
+        new_data.servers = server_data.servers;
+    } else {
+        new_data.servers = data.servers;
+    }
+
+    set_db_user_data(state, &uid, &new_data).await;
+
+    ConsensusRes::SyncedUserData(new_data)
+}
+
+pub async fn val_token(state: &InstanceState, token: &str) -> Result<(String, String), ()> {
+    let row = match sqlx::query("SELECT * FROM tokens WHERE token = ?1 ORDER BY valid DESC LIMIT 1;")
+        .bind(&token)
+        .fetch_one(&state.db_pool)
+        .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            info!("Failed to validate token - {}", e);
+            return Err(())
+        }
+    };
+    let valid: String = row.get("valid");
+    let t = chrono::NaiveDateTime::parse_from_str(&valid, "%Y-%m-%d %H:%M:%S").unwrap();
+
+    if t.and_utc() > chrono::Utc::now() {
+        let uid: String = row.get("user_id");
+        let uinstance: String = row.get("user_instance");
+
+        Ok((uid, uinstance))
+    } else {
+        info!("Authentication attempt with old token - {} too old", valid);
+        Err(())
+    }
 }

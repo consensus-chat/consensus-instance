@@ -1,7 +1,7 @@
 # name of the instance
 name = "Consensus"
-# port for connections
-port = 3000
+# Domain of this instance
+domain = "localhost:3000"
 
 [logging]
 # enable logging to a log file
@@ -18,3 +18,6 @@ level = "Info"
 [users]
 accept_registration = true
 max_users = 16
+
+[servers]
+allow_server_creation = true

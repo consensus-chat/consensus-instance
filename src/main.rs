@@ -1,9 +1,7 @@
 use std::fs::read_to_string;
 
 use axum::{
-    Json, Router,
-    extract::{self, State},
-    routing::post,
+    extract::{self, State}, response::IntoResponse, routing::{get, post}, Json, Router
 };
 
 use log::{LevelFilter, info};
@@ -25,8 +23,10 @@ pub use protocol::*;
 #[derive(Clone, serde::Deserialize)]
 struct Config {
     name: String,
-    port: i64,
+    domain: String,
     logging: CfgLog,
+    users: CfgUser,
+    servers: CfgServer,
 }
 
 #[derive(Clone, serde::Deserialize)]
@@ -36,6 +36,17 @@ struct CfgLog {
     enable_stdout: bool,
     pattern: Option<String>,
     level: Option<String>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct CfgUser {
+    accept_registration: bool,
+    max_users: Option<u32>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct CfgServer {
+    allow_server_creation: bool,
 }
 
 #[derive(Clone)]
@@ -131,6 +142,7 @@ async fn main() {
         .await
         .unwrap();
     info!("Connected to database");
+    util::sanitize_db(&db_pool).await;
 
     let client = reqwest::Client::new();
 
@@ -138,13 +150,15 @@ async fn main() {
     let serve_dir = ServeDir::new("web").not_found_service(ServeFile::new("web/404.html"));
 
     let app = Router::new()
-        .route("/", post(handler))
+    .route("/s/{server_id}/{request_type}", get(server_path_handler))
+        .route("/", post(instance_handler))
         .fallback_service(serve_dir)
         .with_state(InstanceState {
             client,
             config,
             db_pool,
         });
+    
 
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -152,15 +166,32 @@ async fn main() {
 }
 
 // Handle all application requests
-pub async fn handler(
+pub async fn instance_handler(
     State(state): State<InstanceState>,
     extract::Json(payload): extract::Json<ConsensusReq>,
 ) -> Json<ConsensusRes> {
     Json(match payload {
-        ConsensusReq::Login { email, password } => user::user_login(&state, email, password).await,
-        ConsensusReq::ReqToken { instance, user_id, signature } => user::user_request_token(&state, instance, user_id, signature).await,
-        ConsensusReq::ReqUserKey { user_id } => server::server_request_user_key(&state, user_id).await,
-        ConsensusReq::Register { username, email, password } => user::user_register(&state, username, email, password).await,
-        ConsensusReq::ReqUserInfo { token } => user::user_request_user_info(&state, token).await,
+        ConsensusReq::Login { email, password } => user::login(&state, email, password).await,
+        ConsensusReq::ReqToken { instance, user_id, signature } => user::request_token(&state, instance, user_id, signature).await,
+        ConsensusReq::InstReqUserKey { user_id } => server::request_user_key(&state, user_id).await,
+        ConsensusReq::Register { username, email, password } => user::register(&state, username, email, password).await,
+        ConsensusReq::ReqUserData { token } => user::request_user_data(&state, token).await,
+        ConsensusReq::CreateServer { token, server_name } => server::create_server(&state, token, server_name).await,
+        ConsensusReq::JoinServer { token, server_id } => server::join_server(&state, token, server_id).await,
+        ConsensusReq::ReqServerData { token, server_id } => server::request_server_data(&state, token, server_id).await,
+        ConsensusReq::ReqServerStructure { token, server_id } => server::request_server_structure(&state, token, server_id).await,
+        ConsensusReq::SyncUserData { token, data } => user::sync_user_data(&state, token, data).await,
     })
+}
+
+pub async fn server_path_handler(
+    State(state): State<InstanceState>,
+    extract::Path((server_id, request_type)): extract::Path<(String, String)>
+) -> impl IntoResponse {
+    match request_type.as_str() {
+        "img" => {
+            return Ok(server::server_img(server_id).await);
+        },
+        _ => { return Err((axum::http::StatusCode::BAD_REQUEST, "".to_string())); }
+    }
 }
